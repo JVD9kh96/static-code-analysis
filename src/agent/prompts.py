@@ -25,7 +25,7 @@ You are allowed to be **paranoid**. If you see a potential issue, flag it – a 
 **Ignore styling** (line length, naming conventions, docstrings).
 
 ### Input
-You receive: Source Code + Bandit security scan results + Company guidelines (RAG).
+You receive: Source Code + Bandit security scan results + Semgrep pattern scan results + Company guidelines (RAG).
 
 ### Output
 Return **strictly JSON** – a list of potential issues. No markdown fences, no commentary.
@@ -58,6 +58,9 @@ DETECTIVE_USER_TEMPLATE = """\
 
 ### Bandit Security Scan
 {bandit_summary}
+
+### Semgrep Pattern Scan
+{semgrep_summary}
 
 ### Company Coding Guidelines (RAG)
 {rag_context}
@@ -100,6 +103,7 @@ For every potential issue, perform this check:
 ### 4. Deterministic tool priority
 - If MyPy reports a type error, treat it as real unless the message is clearly about missing stubs or ignored imports.
 - Pylint `E`/`W` are often real; keep them when they indicate runtime failure or a real defect.
+- Semgrep findings are rule-based and generally high-signal; treat them as real unless the rule clearly does not apply to the specific code context.
 
 ### Output
 Return **strictly JSON**. No markdown fences, no commentary.
@@ -146,6 +150,9 @@ JUDGE_USER_TEMPLATE = """\
 ### MyPy Results (deterministic type checker)
 {mypy_summary}
 
+### Semgrep Results (pattern-based analysis)
+{semgrep_summary}
+
 Review each finding. Discard false positives. Assign severity and fix suggestions for real issues. Return the JSON.
 """
 
@@ -168,7 +175,7 @@ You are allowed to be **paranoid**. If you see a potential issue, flag it – a 
 **Ignore styling** (brace placement, naming convention micro-nits, XML doc comments).
 
 ### Input
-You receive: Source Code + DevSkim security scan results + Company guidelines (RAG).
+You receive: Source Code + DevSkim security scan results + Semgrep pattern scan results + Company guidelines (RAG).
 
 ### Output
 Return **strictly JSON** – a list of potential issues. No markdown fences, no commentary.
@@ -202,6 +209,9 @@ CS_DETECTIVE_USER_TEMPLATE = """\
 
 ### DevSkim Security Scan
 {devskim_summary}
+
+### Semgrep Pattern Scan
+{semgrep_summary}
 
 ### Company Coding Guidelines (RAG)
 {rag_context}
@@ -243,6 +253,7 @@ For every potential issue, perform this check:
 ### 4. Deterministic tool priority
 - If `dotnet build` reports an error (CS****), treat it as real.
 - Build warnings are often real; keep them when they indicate runtime failure or a real defect.
+- Semgrep findings are rule-based and generally high-signal; treat them as real unless the rule clearly does not apply to the specific code context.
 
 ### Output
 Return **strictly JSON**. No markdown fences, no commentary.
@@ -285,6 +296,9 @@ CS_JUDGE_USER_TEMPLATE = """\
 
 ### Build Diagnostics (dotnet build – filtered)
 {build_summary}
+
+### Semgrep Results (pattern-based analysis)
+{semgrep_summary}
 
 Review each finding. Discard false positives. Assign severity and fix suggestions for real issues. Return the JSON.
 """

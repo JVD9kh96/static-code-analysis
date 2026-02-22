@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Set
 
 from src.languages.base import LanguageProfile
 from src.tools.csharp_analyzer import CSharpTools
+from src.tools.semgrep_analyzer import format_semgrep_summary
 from src.agent.prompts import (
     CS_DETECTIVE_SYSTEM_PROMPT,
     CS_DETECTIVE_USER_TEMPLATE,
@@ -121,10 +122,15 @@ class CSharpProfile(LanguageProfile):
             else "(RAG disabled – no company guidelines provided.)"
         )
 
+        semgrep_summary = format_semgrep_summary(
+            tools.get("semgrep", {"findings": [], "error": None})
+        )
+
         return CS_DETECTIVE_USER_TEMPLATE.format(
             file_path=file_path,
             source_code=source_code,
             devskim_summary=devskim_summary,
+            semgrep_summary=semgrep_summary,
             rag_context=rag_context,
         )
 
@@ -156,11 +162,16 @@ class CSharpProfile(LanguageProfile):
                 else f"  Error: {filtered_build['error']}"
             )
 
+        semgrep_summary = format_semgrep_summary(
+            tools.get("semgrep", {"findings": [], "error": None})
+        )
+
         return CS_JUDGE_USER_TEMPLATE.format(
             file_path=file_path,
             source_code=source_code,
             potential_issues=issues_text,
             build_summary=build_summary,
+            semgrep_summary=semgrep_summary,
         )
 
     # ── scoring ────────────────────────────────────────────────────────

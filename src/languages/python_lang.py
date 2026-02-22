@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Set
 
 from src.languages.base import LanguageProfile
 from src.tools.analyzer import StaticTools
+from src.tools.semgrep_analyzer import format_semgrep_summary
 from src.agent.prompts import (
     DETECTIVE_SYSTEM_PROMPT as PY_DET_SYS,
     DETECTIVE_USER_TEMPLATE as PY_DET_USR,
@@ -115,10 +116,15 @@ class PythonProfile(LanguageProfile):
             else "(RAG disabled – no company guidelines provided.)"
         )
 
+        semgrep_summary = format_semgrep_summary(
+            tools.get("semgrep", {"findings": [], "error": None})
+        )
+
         return PY_DET_USR.format(
             file_path=file_path,
             source_code=source_code,
             bandit_summary=bandit_summary,
+            semgrep_summary=semgrep_summary,
             rag_context=rag_context,
         )
 
@@ -162,12 +168,17 @@ class PythonProfile(LanguageProfile):
         else:
             mypy_summary = "  No MyPy type errors."
 
+        semgrep_summary = format_semgrep_summary(
+            tools.get("semgrep", {"findings": [], "error": None})
+        )
+
         return PY_JUDGE_USR.format(
             file_path=file_path,
             source_code=source_code,
             potential_issues=issues_text,
             pylint_summary=pylint_summary,
             mypy_summary=mypy_summary,
+            semgrep_summary=semgrep_summary,
         )
 
     # ── scoring ────────────────────────────────────────────────────────

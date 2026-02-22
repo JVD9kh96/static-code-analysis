@@ -12,8 +12,8 @@ The evaluator uses a **Detective → Judge** workflow instead of a single "God P
 
 1. **Language Detection** – Auto-detects the language from file extensions (`.py` / `.cs`) or accepts `--lang` to force one.
 2. **Deterministic Tools** – Language-specific static analysers run first.
-   - *Python*: Pylint, Radon, Bandit, MyPy.
-   - *C#*: `dotnet build`, DevSkim, regex-based complexity.
+   - *Python*: Pylint, Radon, Bandit, MyPy, Semgrep.
+   - *C#*: `dotnet build`, DevSkim, regex-based complexity, Semgrep.
 3. **RAG Context** – Retrieves relevant coding rules from a local knowledge base (ChromaDB). Guideline files can cover any language.
 4. **Agent A (The Detective)** – Security & Logic Expert. Scans code + security-tool output + RAG for *potential* issues. Allowed to be paranoid; outputs a list of candidates.
 5. **Agent B (The Judge)** – Senior Code Reviewer. Takes the Detective's list + filtered lint/build diagnostics, filters false positives, assigns severity (Critical/Major/Minor), and outputs verified violations with a `proof_quote`.
@@ -29,8 +29,9 @@ RAG can be disabled with `--no-rag`; the pipeline still runs static tools + both
 |-----------|------------|
 | Language | Python 3.10+ |
 | Target Languages | Python, C# |
-| Static Analysis (Python) | Pylint, Radon, Bandit, MyPy |
-| Static Analysis (C#) | `dotnet build`, DevSkim, regex complexity |
+| Static Analysis (Python) | Pylint, Radon, Bandit, MyPy, Semgrep |
+| Static Analysis (C#) | `dotnet build`, DevSkim, regex complexity, Semgrep |
+| Static Analysis (shared) | Semgrep (language-agnostic pattern matching) |
 | LLM API | `requests` (OpenAI-compatible `/v1/chat/completions`) |
 | Architecture | Multi-Agent (Detective → Judge), Language Profiles |
 | RAG / Vector Store | ChromaDB |
@@ -60,7 +61,8 @@ StaticCodeEval/
 │   │   └── embeddings.py           # sentence-transformers wrapper
 │   ├── tools/
 │   │   ├── analyzer.py             # Python tools: Pylint, Radon, Bandit, MyPy
-│   │   └── csharp_analyzer.py      # C# tools: dotnet build, DevSkim, complexity
+│   │   ├── csharp_analyzer.py      # C# tools: dotnet build, DevSkim, complexity
+│   │   └── semgrep_analyzer.py     # Shared: Semgrep pattern-based scanner
 │   └── utils/
 │       └── config.py               # Configuration loader
 ├── knowledge_base/
@@ -99,8 +101,8 @@ The `LanguageProfile` ABC defines the contract every language must satisfy:
 
 Two profiles are shipped:
 
-- **`PythonProfile`** – wraps Pylint, Radon, Bandit, MyPy; Python Safe Harbor in Judge prompt.
-- **`CSharpProfile`** – wraps `dotnet build`, DevSkim, regex complexity; C# Safe Harbor in Judge prompt.
+- **`PythonProfile`** – wraps Pylint, Radon, Bandit, MyPy, Semgrep; Python Safe Harbor in Judge prompt.
+- **`CSharpProfile`** – wraps `dotnet build`, DevSkim, regex complexity, Semgrep; C# Safe Harbor in Judge prompt.
 
 ### Static Analysis – Python (`src/tools/analyzer.py`)
 
@@ -110,6 +112,7 @@ Two profiles are shipped:
 - **Radon** – Cyclomatic complexity per function/class.
 - **Bandit** – Security issues (e.g. unsafe `subprocess`, `eval`).
 - **MyPy** – Deterministic type checking (incompatible types, missing returns, etc.).
+- **Semgrep** – Pattern-based analysis using community rules (security, correctness, best practices).
 
 `filter_pylint_results()` reduces noise by dropping known token-wasters (docstrings, line-too-long, TODO) and convention/refactor messages unless the score is very low.
 
@@ -120,6 +123,7 @@ Two profiles are shipped:
 - **`dotnet build`** – Compiler errors and warnings (auto-locates nearest `.csproj`).
 - **DevSkim** – Microsoft security linter (SARIF output).
 - **Regex complexity** – Estimates cyclomatic complexity per method by counting branching keywords (`if`, `case`, `for`, `foreach`, `while`, `catch`, `&&`, `||`, `??`).
+- **Semgrep** – Pattern-based analysis using community rules (shared with Python profile).
 
 `filter_build_diagnostics()` drops low-value build warnings (e.g. CS1591 missing XML comment).
 
@@ -149,8 +153,8 @@ Language-agnostic **Detective → Judge** pipeline. For each file:
 2. Run language-specific tools via `profile.run_tools()`.
 3. Filter lint/build noise via `profile.filter_lint()`.
 4. Retrieve RAG guidelines (if enabled).
-5. **Detective** – Code + security-tool output + RAG → `potential_issues`. Explicitly flags use of insecure RNG for secrets.
-6. **Judge** – Code + `potential_issues` + filtered lint/build → `verified_violations` with `proof_quote`, `reasoning` (CoT), and `analysis_summary`. Forced to reason before assigning severity.
+5. **Detective** – Code + security-tool output + Semgrep + RAG → `potential_issues`. Explicitly flags use of insecure RNG for secrets.
+6. **Judge** – Code + `potential_issues` + filtered lint/build + Semgrep → `verified_violations` with `proof_quote`, `reasoning` (CoT), and `analysis_summary`. Forced to reason before assigning severity.
 7. **Scoring** – `profile.calculate_score()`.
 
 ### Prompts (`src/agent/prompts.py`)
@@ -185,6 +189,8 @@ All settings are loaded from environment variables. See the table below.
 ```bash
 pip install -r requirements.txt
 ```
+
+Semgrep is included in `requirements.txt`. On first run with `--config auto` (the default), it fetches community rules from the registry (requires network). Subsequent runs use the cached rules.
 
 For **C# support**, install the .NET SDK and optionally DevSkim:
 

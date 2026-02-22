@@ -315,13 +315,16 @@ class StaticTools:
         return result
 
     # ------------------------------------------------------------------
-    # Convenience – run all three
+    # Convenience – run all
     # ------------------------------------------------------------------
     def run_all(self, file_path: str) -> Dict[str, Any]:
-        """Run Pylint, Radon, and Bandit and merge results."""
+        """Run Pylint, Radon, Bandit, MyPy, and Semgrep and merge results."""
+        from src.tools.semgrep_analyzer import run_semgrep
+
         return {
             "pylint": self.run_pylint(file_path),
             "radon": self.run_radon(file_path),
             "bandit": self.run_bandit(file_path),
             "mypy": self.run_mypy(file_path),
+            "semgrep": run_semgrep(file_path),
         }

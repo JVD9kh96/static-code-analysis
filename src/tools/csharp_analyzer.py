@@ -248,8 +248,11 @@ class CSharpTools:
     # Convenience – run all
     # ------------------------------------------------------------------
     def run_all(self, file_path: str) -> Dict[str, Any]:
+        from src.tools.semgrep_analyzer import run_semgrep
+
         return {
             "dotnet_build": self.run_dotnet_build(file_path),
             "devskim": self.run_devskim(file_path),
             "complexity": self.run_complexity(file_path),
+            "semgrep": run_semgrep(file_path),
         }
