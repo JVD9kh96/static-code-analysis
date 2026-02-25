@@ -137,9 +137,104 @@ def _discover_files(target: str, lang: str | None = None) -> List[Path]:
 
 
 # ------------------------------------------------------------------
+# Directory tree display
+# ------------------------------------------------------------------
+def _build_tree(root: Path, files: List[Path]) -> Dict[str, Any]:
+    """
+    Build a nested dictionary representing the directory tree.
+    Only includes directories that contain discovered files.
+    """
+    tree: Dict[str, Any] = {"__files__": []}
+    
+    for file_path in files:
+        try:
+            rel_path = file_path.relative_to(root)
+        except ValueError:
+            rel_path = file_path
+        
+        parts = rel_path.parts
+        current = tree
+        
+        for part in parts[:-1]:
+            if part not in current:
+                current[part] = {"__files__": []}
+            current = current[part]
+        
+        current["__files__"].append(parts[-1])
+    
+    return tree
+
+
+def _print_tree(
+    tree: Dict[str, Any],
+    prefix: str = "",
+    is_last: bool = True,
+    is_root: bool = True,
+    root_name: str = "",
+) -> None:
+    """Recursively print the directory tree with box-drawing characters."""
+    if is_root:
+        console.print(f"[bold blue]📁 {root_name}/[/bold blue]")
+        prefix = ""
+    
+    dirs = sorted(k for k in tree.keys() if k != "__files__")
+    files = sorted(tree.get("__files__", []))
+    
+    items = [(d, True) for d in dirs] + [(f, False) for f in files]
+    
+    for i, (name, is_dir) in enumerate(items):
+        is_last_item = i == len(items) - 1
+        connector = "└── " if is_last_item else "├── "
+        
+        if is_dir:
+            console.print(f"{prefix}{connector}[bold blue]📁 {name}/[/bold blue]")
+            extension = "    " if is_last_item else "│   "
+            _print_tree(
+                tree[name],
+                prefix=prefix + extension,
+                is_last=is_last_item,
+                is_root=False,
+            )
+        else:
+            ext = Path(name).suffix.lower()
+            icon = "🐍" if ext == ".py" else "🔷" if ext == ".cs" else "📄"
+            console.print(f"{prefix}{connector}{icon} {name}")
+
+
+def _display_project_structure(target: Path, files: List[Path]) -> None:
+    """Display the project structure as a tree before analysis."""
+    if not files:
+        return
+    
+    if target.is_file():
+        ext = target.suffix.lower()
+        icon = "🐍" if ext == ".py" else "🔷" if ext == ".cs" else "📄"
+        console.print(f"\n{icon} [bold]{target.name}[/bold]\n")
+        return
+    
+    console.print("\n[bold cyan]Project Structure[/bold cyan]")
+    console.print("[dim]─" * 40 + "[/dim]")
+    
+    tree = _build_tree(target, files)
+    _print_tree(tree, root_name=target.name)
+    
+    console.print("[dim]─" * 40 + "[/dim]")
+
+
+# ------------------------------------------------------------------
 # Pretty-print helpers
 # ------------------------------------------------------------------
-def _score_color(score: int) -> str:
+def _is_score_na(score: Any) -> bool:
+    """Check if score is N/A (parse error occurred)."""
+    return score == "N/A" or score == "n/a"
+
+
+def _score_color(score: Any) -> str:
+    """Return color based on score value. Handles N/A scores."""
+    if _is_score_na(score):
+        return "magenta"
+    if not isinstance(score, (int, float)):
+        return "red"
     if score >= 90:
         return "green"
     if score >= 70:
@@ -167,14 +262,19 @@ def _print_summary_table(results: List[Dict[str, Any]]) -> None:
         color = _score_color(score)
         n_violations = len(r.get("violations", []))
         verdict = (r.get("summary") or r.get("reliability_analysis", ""))[:80]
-        if r.get("error"):
+        
+        if r.get("parse_error"):
+            verdict = f"[magenta]Parse error – see summary[/magenta]"
+        elif r.get("error"):
             verdict = f"[red]{r['error']}[/red]"
+
+        score_display = str(score) if not _is_score_na(score) else "[magenta]N/A[/magenta]"
 
         table.add_row(
             str(idx),
             str(Path(r.get("file", "?")).name),
             r.get("language", "?"),
-            f"[{color}]{score}[/{color}]",
+            f"[{color}]{score_display}[/{color}]" if not _is_score_na(score) else score_display,
             str(n_violations),
             verdict,
         )
@@ -189,14 +289,29 @@ def _print_detail(result: Dict[str, Any]) -> None:
     file_name = Path(result.get("file", "?")).name
     lang = result.get("language", "?")
 
-    header = Text.assemble(
-        (f" {file_name} ", "bold white on blue"),
-        (f" [{lang}] ", "dim"),
-        ("  Score: ", ""),
-        (str(score), f"bold {color}"),
-        ("/100", "dim"),
-    )
+    if _is_score_na(score):
+        header = Text.assemble(
+            (f" {file_name} ", "bold white on blue"),
+            (f" [{lang}] ", "dim"),
+            ("  Score: ", ""),
+            ("N/A", "bold magenta"),
+            (" (parse error)", "dim magenta"),
+        )
+    else:
+        header = Text.assemble(
+            (f" {file_name} ", "bold white on blue"),
+            (f" [{lang}] ", "dim"),
+            ("  Score: ", ""),
+            (str(score), f"bold {color}"),
+            ("/100", "dim"),
+        )
     console.print(Panel(header, expand=False))
+    
+    if result.get("parse_error"):
+        console.print(f"  [magenta bold]⚠ Parse Error:[/magenta bold] Judge JSON could not be parsed. Refiner attempted repair.")
+        summary = result.get("summary", "")
+        if summary:
+            console.print(f"  [dim]{summary}[/dim]")
 
     summary = result.get("summary") or result.get("reliability_analysis")
     if summary:
@@ -242,19 +357,22 @@ def _export_csv(results: List[Dict[str, Any]], path: Path) -> None:
         "score",
         "violations_count",
         "summary",
+        "parse_error",
         "error",
     ]
     with path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for r in results:
+            score = r.get("score", 0)
             writer.writerow(
                 {
                     "file": r.get("file", ""),
                     "language": r.get("language", ""),
-                    "score": r.get("score", 0),
+                    "score": score if not _is_score_na(score) else "N/A",
                     "violations_count": len(r.get("violations", [])),
                     "summary": r.get("summary", r.get("reliability_analysis", "")),
+                    "parse_error": "Yes" if r.get("parse_error") else "",
                     "error": r.get("error", ""),
                 }
             )
@@ -299,18 +417,22 @@ def main() -> None:
     )
 
     # 1. Discover files
+    target_path = Path(args.path)
     files = _discover_files(args.path, args.lang)
     if not files:
         console.print("[yellow]No supported source files found.[/yellow]")
         return
 
+    # 2. Display project structure
+    _display_project_structure(target_path, files)
+
     lang_counts: Dict[str, int] = {}
     for f in files:
         lang_counts[f.suffix] = lang_counts.get(f.suffix, 0) + 1
     desc = ", ".join(f"{cnt} {ext}" for ext, cnt in sorted(lang_counts.items()))
-    console.print(f"Found [bold]{len(files)}[/bold] file(s) to evaluate ({desc}).\n")
+    console.print(f"\nFound [bold]{len(files)}[/bold] file(s) to evaluate ({desc}).\n")
 
-    # 2. Initialize components
+    # 3. Initialize components
     llm = LLMClient()
 
     retriever = None
@@ -325,7 +447,7 @@ def main() -> None:
 
     evaluator = Evaluator(llm_client=llm, rule_retriever=retriever)
 
-    # 3. Evaluate files in parallel
+    # 4. Evaluate files in parallel
     results: List[Dict[str, Any]] = []
     start = time.perf_counter()
 
@@ -360,29 +482,38 @@ def main() -> None:
 
     elapsed = time.perf_counter() - start
 
-    # 4. Sort by file name
+    # 5. Sort by file name
     results.sort(key=lambda r: r.get("file", ""))
 
-    # 5. Print detailed results per file
+    # 6. Print detailed results per file
     for r in results:
         _print_detail(r)
 
-    # 6. Summary table
+    # 7. Summary table
     _print_summary_table(results)
 
-    # 7. Aggregate stats
-    scores = [r["score"] for r in results if "error" not in r]
-    avg = sum(scores) / len(scores) if scores else 0
-    color = _score_color(int(avg))
+    # 8. Aggregate stats
+    valid_scores = [
+        r["score"] for r in results 
+        if "error" not in r and not _is_score_na(r.get("score"))
+    ]
+    parse_error_count = sum(1 for r in results if r.get("parse_error"))
+    
+    if valid_scores:
+        avg = sum(valid_scores) / len(valid_scores)
+        color = _score_color(int(avg))
+        avg_display = f"[{color}]{avg:.1f}[/{color}]/100"
+    else:
+        avg_display = "[magenta]N/A[/magenta]"
 
-    console.print(
-        f"\n[bold]Average Score:[/bold] [{color}]{avg:.1f}[/{color}]/100  "
-        f"| Files: {len(results)}  "
-        f"| Time: {elapsed:.1f}s  "
-        f"| Workers: {args.workers}"
-    )
+    stats_line = f"\n[bold]Average Score:[/bold] {avg_display}  | Files: {len(results)}"
+    if parse_error_count > 0:
+        stats_line += f"  | [magenta]Parse errors: {parse_error_count}[/magenta]"
+    stats_line += f"  | Time: {elapsed:.1f}s  | Workers: {args.workers}"
+    
+    console.print(stats_line)
 
-    # 8. Export results (if requested)
+    # 9. Export results (if requested)
     if args.output:
         _save_results(results, args.output)
 

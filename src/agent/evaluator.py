@@ -1,5 +1,5 @@
 """
-The Evaluator – Multi-Agent "Detective → Judge" Reflection Architecture.
+The Evaluator – Multi-Agent "Detective → Judge → Refiner" Reflection Architecture.
 
 Orchestrates the full pipeline for a single file, **language-agnostic**:
 
@@ -8,7 +8,8 @@ Orchestrates the full pipeline for a single file, **language-agnostic**:
 3. Retrieve RAG guidelines (if enabled).
 4. Agent A (Detective): source + tool results + RAG → potential_issues.
 5. Agent B (Judge): source + potential_issues + filtered tools → verified_violations.
-6. Deterministic Scoring Engine: score = 100 − penalties, clamped 0–100.
+6. Agent C (Refiner): if Judge JSON fails to parse, attempt repair.
+7. Deterministic Scoring Engine: score = 100 − penalties, clamped 0–100.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from src.agent.llm_client import LLMClient
+from src.agent.prompts import REFINER_SYSTEM_PROMPT, REFINER_USER_TEMPLATE
 from src.languages import detect_profile
 
 if TYPE_CHECKING:
@@ -27,6 +29,9 @@ if TYPE_CHECKING:
     from src.rag.engine import RuleRetriever
 
 logger = logging.getLogger(__name__)
+
+# Sentinel value for parse failures
+SCORE_NOT_AVAILABLE = "N/A"
 
 
 class Evaluator:
@@ -133,13 +138,18 @@ class Evaluator:
         except RuntimeError as exc:
             return self._error_result(file_path, f"LLM error (Judge): {exc}")
 
-        verified_data = self._parse_judge_response(judge_response)
-
-        # 5. Deterministic Scoring (language-specific)
-        final_score = profile.calculate_score(
-            verified_data.get("verified_violations", []),
-            tools,
+        verified_data, parse_error = self._parse_judge_response_with_refiner(
+            judge_response, path.name
         )
+
+        # 6. Deterministic Scoring (language-specific)
+        if parse_error:
+            final_score = SCORE_NOT_AVAILABLE
+        else:
+            final_score = profile.calculate_score(
+                verified_data.get("verified_violations", []),
+                tools,
+            )
 
         return {
             "file": file_path,
@@ -149,14 +159,20 @@ class Evaluator:
             "summary": verified_data.get("analysis_summary", ""),
             "reliability_analysis": verified_data.get("analysis_summary", ""),
             "maintainability_analysis": "",
+            "parse_error": parse_error,
         }
 
     # ------------------------------------------------------------------
     # Parsing helpers
     # ------------------------------------------------------------------
     @staticmethod
+    def _clean_json_response(raw: str) -> str:
+        """Remove markdown fences and whitespace from LLM JSON output."""
+        return re.sub(r"```(?:json)?", "", raw).strip().rstrip("`")
+
+    @staticmethod
     def _parse_json_list(raw: str) -> List[Dict[str, Any]]:
-        cleaned = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`")
+        cleaned = Evaluator._clean_json_response(raw)
         try:
             data = json.loads(cleaned)
             return data if isinstance(data, list) else []
@@ -164,17 +180,82 @@ class Evaluator:
             return []
 
     @staticmethod
-    def _parse_judge_response(raw: str) -> Dict[str, Any]:
-        cleaned = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`")
+    def _try_parse_judge_json(cleaned: str) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """
+        Attempt to parse Judge JSON.
+        Returns (parsed_data, None) on success, or (None, error_message) on failure.
+        """
         try:
             data = json.loads(cleaned)
             return {
                 "verified_violations": data.get("verified_violations", []),
                 "analysis_summary": data.get("analysis_summary", ""),
-            }
+            }, None
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
-            logger.warning("Failed to parse Judge JSON: %s", exc)
-            return {"verified_violations": [], "analysis_summary": "Parse error."}
+            return None, str(exc)
+
+    def _parse_judge_response_with_refiner(
+        self, raw: str, file_name: str
+    ) -> tuple[Dict[str, Any], bool]:
+        """
+        Parse Judge response with automatic refinement on failure.
+
+        Returns
+        -------
+        tuple[Dict[str, Any], bool]
+            (parsed_data, parse_error_flag)
+            - If successful: (data, False)
+            - If failed after refinement: (empty_data_with_error_summary, True)
+        """
+        cleaned = self._clean_json_response(raw)
+
+        # First attempt: parse directly
+        data, error = self._try_parse_judge_json(cleaned)
+        if data is not None:
+            return data, False
+
+        logger.warning("[%s] Failed to parse Judge JSON: %s", file_name, error)
+        logger.info("[%s] Calling Refiner agent to repair JSON …", file_name)
+
+        # Call Refiner agent
+        try:
+            refiner_response = self._llm.chat(
+                messages=[
+                    {"role": "system", "content": REFINER_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": REFINER_USER_TEMPLATE.format(
+                            malformed_json=cleaned,
+                            error_message=error,
+                        ),
+                    },
+                ]
+            )
+        except RuntimeError as exc:
+            logger.error("[%s] Refiner LLM call failed: %s", file_name, exc)
+            return {
+                "verified_violations": [],
+                "analysis_summary": f"JSON parse error: {error}. Refiner call failed.",
+            }, True
+
+        # Second attempt: parse refined JSON
+        refined_cleaned = self._clean_json_response(refiner_response)
+        data, second_error = self._try_parse_judge_json(refined_cleaned)
+        if data is not None:
+            logger.info("[%s] Refiner successfully repaired JSON.", file_name)
+            return data, False
+
+        # Both attempts failed
+        logger.error(
+            "[%s] Refiner could not repair JSON. Original error: %s | Refiner error: %s",
+            file_name,
+            error,
+            second_error,
+        )
+        return {
+            "verified_violations": [],
+            "analysis_summary": f"JSON parse error: {error}. Refiner failed: {second_error}",
+        }, True
 
     # ------------------------------------------------------------------
     # RAG helpers

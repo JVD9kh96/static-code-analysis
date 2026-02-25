@@ -35,13 +35,16 @@ class LLMClient:
     * Each thread gets its own ``requests.Session`` (connection pooling).
     * Automatic retries with exponential back-off on transient errors.
     * Model-agnostic: swap ``LLM_API_URL`` and ``LLM_MODEL`` env vars to
-      point at any compatible backend (Gemma, DeepSeek, Ollama, vLLM …).
+      point at any compatible backend (Gemma, DeepSeek, Ollama, vLLM,
+      OpenAI, GapGPT, etc.).
+    * Supports optional API key authentication for cloud providers.
     """
 
     def __init__(
         self,
         api_url: str | None = None,
         model: str | None = None,
+        api_key: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
         timeout: int | None = None,
@@ -49,6 +52,7 @@ class LLMClient:
     ) -> None:
         self.api_url = api_url or settings.llm_api_url
         self.model = model or settings.llm_model
+        self.api_key = api_key if api_key is not None else settings.llm_api_key
         self.temperature = temperature if temperature is not None else settings.llm_temperature
         self.max_tokens = max_tokens or settings.llm_max_tokens
         self.timeout = timeout or settings.llm_timeout
@@ -77,6 +81,10 @@ class LLMClient:
             "max_tokens": max_tokens or self.max_tokens,
         }
 
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
         last_error: Optional[Exception] = None
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -84,6 +92,7 @@ class LLMClient:
                 response = session.post(
                     self.api_url,
                     json=payload,
+                    headers=headers,
                     timeout=self.timeout,
                 )
                 response.raise_for_status()

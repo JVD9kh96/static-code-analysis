@@ -23,23 +23,48 @@ class Settings:
     """Immutable, thread-safe configuration object."""
 
     # ── LLM API (any OpenAI-compatible endpoint) ────────────────────
+    # Uncomment ONE of the following configurations:
+    
+    # --- Local: Gemma ---
     llm_api_url: str = os.getenv(
         "LLM_API_URL",
-        "http://87.236.166.36:8082/v1/chat/completions",
+        "http://185.239.2.124:8082/v1/chat/completions",
     )
     llm_model: str = os.getenv("LLM_MODEL", "gemma")
+    llm_api_key: str = os.getenv("LLM_API_KEY", "")
 
+    # --- Local: DeepSeek ---
     # llm_api_url: str = os.getenv(
     #     "LLM_API_URL",
     #     "http://87.236.166.36:8083/v1/chat/completions",
     # )
     # llm_model: str = os.getenv("LLM_MODEL", "deepseek")
+    # llm_api_key: str = os.getenv("LLM_API_KEY", "")
 
+    # --- Local: Qwen ---
     # llm_api_url: str = os.getenv(
     #     "LLM_API_URL",
     #     "http://87.236.166.36:8084/v1/chat/completions",
     # )
     # llm_model: str = os.getenv("LLM_MODEL", "Qwen")
+    # llm_api_key: str = os.getenv("LLM_API_KEY", "")
+
+    # --- Cloud: OpenAI (ChatGPT) ---
+    # llm_api_url: str = os.getenv(
+    #     "LLM_API_URL",
+    #     "https://api.openai.com/v1/chat/completions",
+    # )
+    # llm_model: str = os.getenv("LLM_MODEL", "gpt-4o")  # or "gpt-4o-mini", "gpt-4-turbo"
+    # llm_api_key: str = os.getenv("LLM_API_KEY", "sk-...")  # Your OpenAI API key
+
+    # --- Cloud: GapGPT (ChatGPT via proxy) ---
+    # Equivalent to: OpenAI(base_url='https://api.gapgpt.app/v1', api_key='...')
+    # llm_api_url: str = os.getenv(
+    #     "LLM_API_URL",
+    #     "https://api.gapgpt.app/v1/chat/completions",
+    # )
+    # llm_model: str = os.getenv("LLM_MODEL", "gpt-4o")
+    # llm_api_key: str = os.getenv("LLM_API_KEY", "sk-XMl5oeYZqBhXbdhDKO3CNXwlwicYb8wrsL3ciHRfIogPZyHZ")
 
     llm_temperature: float = float(os.getenv("LLM_TEMPERATURE", "0.2"))
     llm_max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "2048"))
